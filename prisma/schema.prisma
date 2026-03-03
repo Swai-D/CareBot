@@ -1,0 +1,85 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String?
+  role      String   @default("ADMIN")
+  business  Business? @relation(fields: [businessId], references: [id])
+  businessId String?
+  createdAt DateTime @default(now())
+}
+
+model Business {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  plan        String   @default("FREE") // FREE, STARTER, GROWTH, PRO
+  users       User[]
+  channels    Channel[]
+  faqs        Faq[]
+  conversations Conversation[]
+  agentConfig AgentConfig?
+  createdAt   DateTime @default(now())
+}
+
+model AgentConfig {
+  id            String   @id @default(uuid())
+  agentName     String   @default("Msaidizi")
+  systemPrompt  String   @db.Text
+  tone          String   @default("friendly")
+  model         String   @default("gpt-4o")
+  business      Business @relation(fields: [businessId], references: [id])
+  businessId    String   @unique
+}
+
+model Channel {
+  id          String   @id @default(uuid())
+  type        String   // 'WHATSAPP' au 'INSTAGRAM'
+  phoneNumber String?  // Badala ya name
+  status      String   @default("DISCONNECTED") // CONNECTED, DISCONNECTED, CONNECTING
+  credentials String?  @db.Text // Hapa tutahifadhi tokens au session data (JSON)
+  business    Business @relation(fields: [businessId], references: [id])
+  businessId  String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([businessId, type])
+}
+
+model Conversation {
+  id         String   @id @default(uuid())
+  externalId String   @unique
+  customer   String   
+  status     String   @default("open")
+  lastMessage String?
+  business   Business @relation(fields: [businessId], references: [id])
+  businessId String
+  messages   Message[]
+  updatedAt  DateTime @updatedAt
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  text           String       @db.Text
+  sender         String       
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  conversationId String
+  createdAt      DateTime     @default(now())
+}
+
+model Faq {
+  id         String   @id @default(uuid())
+  question   String   @db.Text
+  answer     String   @db.Text
+  business   Business @relation(fields: [businessId], references: [id])
+  businessId String
+}
