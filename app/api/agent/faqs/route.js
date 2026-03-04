@@ -1,46 +1,41 @@
+// app/api/agent/faqs/route.js
 import prisma from "@/lib/prisma";
-import jwt from "jsonwebtoken";
 import { NextResponse } from "next/server";
-
-const SECRET = process.env.JWT_SECRET || "carebot_secret_key_2026";
-
-async function getAuthUser(req) {
-  const authHeader = req.headers.get("authorization");
-  if (!authHeader) return null;
-  const token = authHeader.split(" ")[1];
-  try {
-    const decoded = jwt.verify(token, SECRET);
-    return await prisma.user.findUnique({
-      where: { id: decoded.userId },
-      include: { business: true }
-    });
-  } catch { return null; }
-}
+import { verifyToken, handleError } from "@/lib/auth";
 
 export async function GET(req) {
-  const user = await getAuthUser(req);
-  if (!user || !user.businessId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    const decoded = verifyToken(req);
+    const businessId = decoded.businessId;
 
-  const faqs = await prisma.faq.findMany({
-    where: { businessId: user.businessId }
-  });
+    const faqs = await prisma.agentFaq.findMany({
+      where: { businessId },
+      orderBy: { priority: "desc" }
+    });
 
-  return NextResponse.json(faqs);
+    return NextResponse.json(faqs);
+  } catch (err) {
+    return handleError(err);
+  }
 }
 
 export async function POST(req) {
-  const user = await getAuthUser(req);
-  if (!user || !user.businessId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    const decoded = verifyToken(req);
+    const businessId = decoded.businessId;
 
-  const { question, answer } = await req.json();
+    const { question, answer } = await req.json();
 
-  const faq = await prisma.faq.create({
-    data: {
-      question,
-      answer,
-      businessId: user.businessId
-    }
-  });
+    const faq = await prisma.agentFaq.create({
+      data: {
+        question,
+        answer,
+        businessId
+      }
+    });
 
-  return NextResponse.json(faq);
+    return NextResponse.json(faq);
+  } catch (err) {
+    return handleError(err);
+  }
 }

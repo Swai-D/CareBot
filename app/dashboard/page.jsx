@@ -128,23 +128,50 @@ export default function Dashboard() {
   const [agentName, setAgentName] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [agentTone, setAgentTone] = useState("friendly");
-  const [agentModel, setAgentModel] = useState("gpt-4o");
+  const [agentModel, setAgentModel] = useState("auto");
   const [faqModal, setFaqModal] = useState(null); // { question, answer, id } au "add"
+  
+  // New AI Settings
+  const [models, setModels] = useState([]);
+  const [testMsg, setTestMsg] = useState("");
+  const [testReply, setTestReply] = useState(null);
+  const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    if (page === "agent") {
+      api.agent.getModels().then(data => setModels(data.models || [])).catch(console.error);
+    }
+  }, [page]);
 
   useEffect(() => {
     if (config) {
-      setAgentName(config.agentName);
-      setSystemPrompt(config.systemPrompt);
-      setAgentTone(config.tone || "friendly");
-      setAgentModel(config.model || "gpt-4o");
+      setAgentName(config.agentName || "");
+      setSystemPrompt(config.systemPrompt || "");
+      setAgentTone(config.agentTone || "friendly");
+      setAgentModel(config.openclawModel || "auto");
     }
   }, [config]);
 
   const handleSaveAgent = async () => {
     try {
-      await saveConfig({ agentName, systemPrompt, tone: agentTone, model: agentModel });
+      await saveConfig({ 
+        agentName, 
+        systemPrompt, 
+        agentTone, 
+        openclawModel: agentModel 
+      });
       alert("Mabadiliko yamehifadhiwa!");
     } catch (e) { alert(e.message); }
+  };
+
+  const testAgent = async () => {
+    if (!testMsg.trim()) return;
+    setTesting(true);
+    try {
+      const res = await api.agent.test({ message: testMsg });
+      setTestReply(res);
+    } catch (e) { alert(e.message); }
+    finally { setTesting(false); }
   };
 
   const handleFaqAction = async (e) => {
@@ -282,10 +309,10 @@ export default function Dashboard() {
                   <div key={c.id} className="conv-row" onClick={() => setActiveConvId(c.id)}
                     style={{ padding: "12px 16px", borderBottom: `1px solid ${BORDER}`, background: activeConvId === c.id ? CARD2 : "transparent" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600 }}>{c.customer?.name || c.customer || "Mteja"}</span>
-                      <span style={{ fontSize: 10, color: MUTED }}>{new Date(c.updatedAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>{c.customerName || c.customerId || "Mteja"}</span>
+                      <span style={{ fontSize: 10, color: MUTED }}>{c.updatedAt ? new Date(c.updatedAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : ""}</span>
                     </div>
-                    <p style={{ fontSize: 11, color: MUTED, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.lastMessage}</p>
+                    <p style={{ fontSize: 11, color: MUTED, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.messages?.[0]?.content || "Hakuna ujumbe"}</p>
                   </div>
                 ))}
               </div>
@@ -293,7 +320,7 @@ export default function Dashboard() {
             {activeConvId ? (
               <div style={{ flex: 1, background: CARD, border: `1px solid ${BORDER}`, borderRadius: 12, display: "flex", flexDirection: "column", overflow: "hidden" }}>
                 <div style={{ padding: "14px 20px", borderBottom: `1px solid ${BORDER}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ fontWeight: 600 }}>{active?.customer}</div>
+                  <div style={{ fontWeight: 600 }}>{active?.customerName || active?.customerId}</div>
                   <div style={{ display: "flex", gap: 8 }}>
                     <button onClick={() => resolve()} style={{ padding: "6px 12px", borderRadius: 7, background: `${TEAL}18`, border: `1px solid ${TEAL}40`, color: TEAL, fontSize: 11, cursor: "pointer" }}>Maliza</button>
                   </div>
@@ -301,8 +328,15 @@ export default function Dashboard() {
                 <div style={{ flex: 1, overflow: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 12 }}>
                   {activeLoading ? <div style={{ textAlign: "center" }}><RefreshCw className="spin" /></div> : 
                    active?.messages?.map((m, i) => (
-                    <div key={i} style={{ display: "flex", justifyContent: m.sender === "customer" ? "flex-start" : "flex-end" }}>
-                      <div style={{ background: m.sender === "customer" ? CARD2 : `${TEAL}18`, border: `1px solid ${m.sender === "customer" ? BORDER : TEAL + "40"}`, borderRadius: 12, padding: "10px 14px", fontSize: 13, maxWidth: "70%" }}>{m.text}</div>
+                    <div key={i} style={{ display: "flex", justifyContent: m.senderType === "CUSTOMER" ? "flex-start" : "flex-end" }}>
+                      <div style={{ 
+                        background: m.senderType === "CUSTOMER" ? CARD2 : `${TEAL}18`, 
+                        border: `1px solid ${m.senderType === "CUSTOMER" ? BORDER : TEAL + "40"}`, 
+                        borderRadius: 12, padding: "10px 14px", fontSize: 13, maxWidth: "70%" 
+                      }}>
+                        {m.content}
+                        {m.openclawModelUsed && <div style={{ fontSize: 9, color: MUTED, marginTop: 4 }}>via {m.openclawModelUsed}</div>}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -351,19 +385,52 @@ export default function Dashboard() {
                       style={{ width: "100%", background: CARD2, border: `1px solid ${BORDER}`, borderRadius: 8, padding: "10px 12px", color: TEXT, fontSize: 12, lineHeight: 1.6, fontFamily: "'DM Mono', monospace" }} />
                   </div>
                   <div>
-                    <label style={{ fontSize: 11, color: MUTED, display: "block", marginBottom: 6 }}>AI Model (via OpenClaw)</label>
+                    <label style={{ fontSize: 11, color: MUTED, display: "block", marginBottom: 6 }}>AI Model (via OpenRouter)</label>
                     <select value={agentModel} onChange={e => setAgentModel(e.target.value)}
                       style={{ width: "100%", background: CARD2, border: `1px solid ${BORDER}`, borderRadius: 8, padding: "9px 12px", color: TEXT, fontSize: 13 }}>
-                      <option value="gpt-4o">GPT-4o (Standard)</option>
-                      <option value="gpt-4o-mini">GPT-4o Mini (Fast)</option>
-                      <option value="claude-3-5-sonnet-20240620">Claude 3.5 Sonnet</option>
-                      <option value="llama-3.1-8b-instant">Llama 3.1 (Fast & Local)</option>
+                      {models.map(m => (
+                        <option key={m.key} value={m.key} disabled={m.locked}>
+                          {m.label} {m.locked ? "🔒 Pro" : ""}
+                        </option>
+                      ))}
                     </select>
                   </div>
                   <button onClick={handleSaveAgent} disabled={saving}
                     style={{ background: TEAL, color: "#000", border: "none", borderRadius: 8, padding: "10px", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>
                     {saving ? "Inahifadhi..." : "Hifadhi Mabadiliko"}
                   </button>
+
+                  {/* Test Agent UI */}
+                  <div style={{ marginTop: 20, paddingTop: 20, borderTop: `1px solid ${BORDER}` }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                      <Zap size={14} color={TEAL} />
+                      <h3 style={{ fontSize: 13, fontWeight: 700 }}>Jaribu Agent</h3>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                      <input 
+                        value={testMsg} 
+                        onChange={e => setTestMsg(e.target.value)}
+                        placeholder="Andika kitu..." 
+                        style={{ flex: 1, background: CARD2, border: `1px solid ${BORDER}`, borderRadius: 8, padding: "8px 12px", color: TEXT, fontSize: 12 }} 
+                      />
+                      <button 
+                        onClick={testAgent} 
+                        disabled={testing || !testMsg.trim()}
+                        style={{ background: `${TEAL}18`, border: `1px solid ${TEAL}40`, borderRadius: 8, padding: "0 12px", color: TEAL, fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+                      >
+                        {testing ? "..." : "Jaribu"}
+                      </button>
+                    </div>
+                    {testReply && (
+                      <div style={{ background: CARD2, borderRadius: 8, padding: 12, border: `1px solid ${BORDER}` }}>
+                        <p style={{ fontSize: 12, lineHeight: 1.5 }}>{testReply.response}</p>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 9, color: MUTED }}>
+                          <span>Model: {testReply.modelUsed}</span>
+                          <span>{testReply.latencyMs}ms</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 

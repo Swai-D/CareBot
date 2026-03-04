@@ -19,67 +19,113 @@ model User {
 }
 
 model Business {
-  id          String   @id @default(uuid())
-  name        String
-  description String?
-  plan        String   @default("FREE") // FREE, STARTER, GROWTH, PRO
-  users       User[]
-  channels    Channel[]
-  faqs        Faq[]
+  id            String         @id @default(uuid())
+  name          String
+  description   String?        @db.Text
+  plan          String         @default("FREE") // FREE, STARTER, GROWTH, PRO
+  users         User[]
+  channels      Channel[]
+  agentFaqs     AgentFaq[]
   conversations Conversation[]
-  agentConfig AgentConfig?
-  createdAt   DateTime @default(now())
+  messages      Message[]
+  agentConfig   AgentConfig?
+  subscription  Subscription?
+  createdAt     DateTime       @default(now())
 }
 
 model AgentConfig {
-  id            String   @id @default(uuid())
-  agentName     String   @default("Msaidizi")
-  systemPrompt  String   @db.Text
-  tone          String   @default("friendly")
-  model         String   @default("gpt-4o")
-  business      Business @relation(fields: [businessId], references: [id])
-  businessId    String   @unique
+  id                 String   @id @default(uuid())
+  businessId         String   @unique
+  business           Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  agentName          String   @default("Msaidizi")
+  agentTone          String   @default("friendly")
+  systemPrompt       String?  @db.Text
+  greetingMessage    String?  @db.Text
+  fallbackMessage    String?  @db.Text
+  escalationMessage  String?  @db.Text
+  openclawModel      String   @default("auto")
+  maxResponseTokens  Int      @default(500)
+  temperature        Float    @default(0.7)
+  autoEscalate       Boolean  @default(false)
+  escalateAfter      Int      @default(5)
+  businessHours      Json?
+  outOfHoursMessage  String?  @db.Text
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 }
 
 model Channel {
-  id          String   @id @default(uuid())
-  type        String   // 'WHATSAPP' au 'INSTAGRAM'
-  phoneNumber String?  // Badala ya name
-  status      String   @default("DISCONNECTED") // CONNECTED, DISCONNECTED, CONNECTING
-  credentials String?  @db.Text // Hapa tutahifadhi tokens au session data (JSON)
-  business    Business @relation(fields: [businessId], references: [id])
-  businessId  String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id            String         @id @default(uuid())
+  type          String         // 'WHATSAPP' au 'INSTAGRAM'
+  phoneNumber   String?  
+  status        String         @default("DISCONNECTED") 
+  credentials   String?        @db.Text 
+  business      Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId    String
+  conversations Conversation[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
 
   @@unique([businessId, type])
 }
 
 model Conversation {
-  id         String   @id @default(uuid())
-  externalId String   @unique
-  customer   String   
-  status     String   @default("open")
-  lastMessage String?
-  business   Business @relation(fields: [businessId], references: [id])
-  businessId String
-  messages   Message[]
-  updatedAt  DateTime @updatedAt
+  id              String    @id @default(uuid())
+  externalId      String    @unique
+  businessId      String
+  business        Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  channelId       String?
+  channel         Channel?  @relation(fields: [channelId], references: [id])
+  channelType     String    // "WHATSAPP" | "INSTAGRAM"
+  customerId      String
+  customerPhone   String?
+  customerName    String?
+  status          String    @default("OPEN")
+  isHumanHandling Boolean   @default(false)
+  lastMessageAt   DateTime?
+  resolvedAt      DateTime?
+  messages        Message[]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 }
 
 model Message {
-  id             String       @id @default(uuid())
-  text           String       @db.Text
-  sender         String       
-  conversation   Conversation @relation(fields: [conversationId], references: [id])
-  conversationId String
-  createdAt      DateTime     @default(now())
+  id                 String       @id @default(uuid())
+  conversationId     String
+  conversation       Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  businessId         String
+  business           Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  senderType         String       // "CUSTOMER" | "AI" | "HUMAN_AGENT"
+  content            String       @db.Text
+  platformMessageId  String?
+  openclawModelUsed  String?
+  openclawLatencyMs  Int?
+  createdAt          DateTime     @default(now())
 }
 
-model Faq {
+model AgentFaq {
   id         String   @id @default(uuid())
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   question   String   @db.Text
   answer     String   @db.Text
-  business   Business @relation(fields: [businessId], references: [id])
-  businessId String
+  category   String?
+  isActive   Boolean  @default(true)
+  priority   Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Subscription {
+  id                   String   @id @default(uuid())
+  businessId           String   @unique
+  business             Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  plan                 String   @default("FREE")
+  status               String   @default("ACTIVE")
+  messagesLimit        Int      @default(100)
+  messagesUsed         Int      @default(0)
+  currentPeriodEnd     DateTime?
+  stripeSubscriptionId String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 }

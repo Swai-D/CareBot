@@ -1,69 +1,59 @@
 // app/api/agent/config/route.js
-import prisma from "@/lib/prisma";
-import jwt from "jsonwebtoken";
+
 import { NextResponse } from "next/server";
+import { verifyToken, handleError } from "@/lib/auth";
+import prisma from "@/lib/prisma";
 
-const SECRET = process.env.JWT_SECRET || "carebot_secret_key_2026";
-
-async function getAuthUser(req) {
-  const authHeader = req.headers.get("authorization");
-  if (!authHeader) return null;
-  const token = authHeader.split(" ")[1];
+// ── GET /api/agent/config ─────────────────────────────────────────
+export async function GET(request) {
   try {
-    const decoded = jwt.verify(token, SECRET);
-    return await prisma.user.findUnique({
-      where: { id: decoded.userId },
-      include: { business: true }
+    const { businessId } = verifyToken(request);
+
+    const config = await prisma.agentConfig.findUnique({
+      where: { businessId },
     });
-  } catch { return null; }
-}
 
-export async function GET(req) {
-  const user = await getAuthUser(req);
-  if (!user || !user.businessId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  let config = await prisma.agentConfig.findUnique({
-    where: { businessId: user.businessId }
-  });
-
-  // Create default if not exists
-  if (!config) {
-    config = await prisma.agentConfig.create({
-      data: {
-        businessId: user.businessId,
-        agentName: user.business.name + " Bot",
-        systemPrompt: user.business.description || "Wewe ni msaidizi wa AI.",
-        tone: "friendly",
-        model: "gpt-4o"
-      }
-    });
+    return NextResponse.json(config || {});
+  } catch (err) {
+    return handleError(err);
   }
-
-  return NextResponse.json(config);
 }
 
-export async function PATCH(req) {
-  const user = await getAuthUser(req);
-  if (!user || !user.businessId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+// ── PATCH /api/agent/config ───────────────────────────────────────
+export async function PATCH(request) {
+  try {
+    const { businessId } = verifyToken(request);
+    const body = await request.json();
 
-  const body = await req.json();
+    // Fields zinazoruhusiwa kubadilishwa
+    const allowed = [
+      "agentName", "agentTone", "systemPrompt",
+      "greetingMessage", "fallbackMessage", "escalationMessage",
+      "openclawModel",  // ← hii ndiyo model selector
+      "maxResponseTokens", "temperature",
+      "autoEscalate", "escalateAfter",
+      "businessHours", "outOfHoursMessage",
+    ];
 
-  const updated = await prisma.agentConfig.upsert({
-    where: { businessId: user.businessId },
-    update: {
-      agentName: body.agentName,
-      systemPrompt: body.systemPrompt,
-      tone: body.tone,
-      model: body.model
-    },
-    create: {
-      businessId: user.businessId,
-      agentName: body.agentName,
-      systemPrompt: body.systemPrompt,
-      tone: body.tone,
-      model: body.model
+    const data = {};
+    for (const key of allowed) {
+      if (body[key] !== undefined) data[key] = body[key];
     }
-  });
 
-  return NextResponse.json(updated);
+    if (Object.keys(data).length === 0) {
+      return NextResponse.json({ error: "Hakuna mabadiliko" }, { status: 400 });
+    }
+
+    const config = await prisma.agentConfig.upsert({
+      where:  { businessId },
+      update: { ...data, updatedAt: new Date() },
+      create: { businessId, ...data },
+    });
+
+    console.log(`[Agent] Config imesasishwa kwa ${businessId}: model=${config.openclawModel}`);
+
+    return NextResponse.json(config);
+  } catch (err) {
+    return handleError(err);
+  }
 }

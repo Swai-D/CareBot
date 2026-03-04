@@ -1,15 +1,17 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Lazimisha Next.js kutobundle library za Baileys na WebSockets
-  serverExternalPackages: [
-    "@whiskeysockets/baileys",
-    "ws",
-    "bufferutil",
-    "utf-8-validate",
-    "pino",
-    "pino-pretty",
-    "link-preview-js"
-  ],
+  experimental: {
+    // In Next.js 14, this is under experimental
+    serverComponentsExternalPackages: [
+      "@whiskeysockets/baileys",
+      "ws",
+      "bufferutil",
+      "utf-8-validate",
+      "pino",
+      "pino-pretty",
+      "link-preview-js"
+    ],
+  },
   // Zima baadhi ya features zinazoweza kuvuruga Baileys kwenye dev mode
   webpack: (config) => {
     config.externals.push({

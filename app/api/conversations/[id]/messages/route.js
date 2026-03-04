@@ -1,58 +1,73 @@
 // app/api/conversations/[id]/messages/route.js
 import prisma from "@/lib/prisma";
-import jwt from "jsonwebtoken";
 import { NextResponse } from "next/server";
-import OpenClaw from "@/lib/openclaw";
+import { verifyToken, handleError } from "@/lib/auth";
+import { getSocket, initWhatsAppSocket } from "@/lib/whatsapp";
+import { getAIResponse } from "@/lib/ai";
 
-const SECRET = process.env.JWT_SECRET || "carebot_secret_key_2026";
+// ── Helper: normalize JID kwa ajili ya kutuma ─────────────────────
+function getSendJid(externalId = "") {
+  if (!externalId.startsWith("wa_")) return null;
+  const parts = externalId.split("_");
+  if (parts.length < 2) return null;
+  const phone = parts[1].split("@")[0].split(":")[0];
+  return `${phone}@s.whatsapp.net`;
+}
 
 export async function POST(req, { params }) {
   try {
     const { id: conversationId } = params;
-    const { text, sender } = await req.json(); // sender can be 'admin' or 'customer'
+    const { text, sender } = await req.json();
 
-    // Get the auth user if sender is admin
-    const authHeader = req.headers.get("authorization");
-    let businessId = null;
+    const { businessId } = verifyToken(req);
 
-    if (authHeader) {
-      const token = authHeader.split(" ")[1];
-      const decoded = jwt.verify(token, SECRET);
-      const user = await prisma.user.findUnique({ where: { id: decoded.userId } });
-      businessId = user.businessId;
-    }
-
-    // Find the conversation
-    const conversation = await prisma.conversation.findUnique({
-      where: { id: conversationId },
-      include: { business: { include: { agentConfig: true, faqs: true } } }
+    // Find the conversation and verify ownership
+    const conversation = await prisma.conversation.findFirst({
+      where: { id: conversationId, businessId },
+      include: { 
+        business: { include: { agentConfig: true, agentFaqs: true } },
+      }
     });
 
     if (!conversation) return NextResponse.json({ error: "Conversation not found" }, { status: 404 });
 
-    // Save user message
-    const userMessage = await prisma.message.create({
+    // Save message
+    const senderType = sender === "customer" ? "CUSTOMER" : "HUMAN_AGENT";
+    const newMessage = await prisma.message.create({
       data: {
-        text,
-        sender: sender || "admin",
-        conversationId
+        content: text,
+        senderType,
+        conversationId,
+        businessId
       }
     });
 
-    // Update conversation updatedAt
+    // Update conversation
     await prisma.conversation.update({
       where: { id: conversationId },
-      data: { updatedAt: new Date() }
+      data: { updatedAt: new Date(), lastMessageAt: new Date() }
     });
 
+    // If admin is sending message, try to send via WhatsApp
+    if (senderType === "HUMAN_AGENT") {
+       let socket = getSocket(businessId);
+       
+       if (!socket?.user) {
+         console.warn(`[WA:${businessId}] Socket is missing from memory during manual send. Re-initializing...`);
+         socket = await initWhatsAppSocket(businessId);
+       }
+
+       const sendJid = getSendJid(conversation.externalId);
+       if (socket && sendJid) {
+          console.log(`[WA:${businessId}] Sending manual message to ${sendJid}`);
+          await socket.sendMessage(sendJid, { text });
+       }
+    }
+
     // If message is from customer, generate AI response
-    if (sender === "customer") {
-      const config = conversation.business.agentConfig || { 
-        agentName: "Msaidizi", 
-        systemPrompt: "Wewe ni msaidizi wa AI.", 
-        tone: "friendly", 
-        model: "gpt-4o" 
-      };
+    if (senderType === "CUSTOMER" && !conversation.isHumanHandling) {
+      const config = conversation.business.agentConfig;
+      const faqs = conversation.business.agentFaqs;
 
       const history = await prisma.message.findMany({
         where: { conversationId },
@@ -60,46 +75,65 @@ export async function POST(req, { params }) {
         take: 10
       });
 
-      const aiLayer = new OpenClaw({
-        model: config.model,
-        systemPrompt: config.systemPrompt,
-        tone: config.tone
-      });
+      try {
+        const aiResult = await getAIResponse({
+          message: text,
+          agentConfig: config ? { ...config, faqs } : { faqs },
+          businessName: conversation.business.name,
+          channel: conversation.channelType || "WHATSAPP",
+          conversationHistory: history.reverse(),
+        });
 
-      const aiResponseText = await aiLayer.generateResponse(
-        text, 
-        history.reverse(), 
-        conversation.business.faqs
-      );
+        if (aiResult.text) {
+          const aiMessage = await prisma.message.create({
+            data: {
+              content: aiResult.text,
+              senderType: "AI",
+              conversationId,
+              businessId,
+              openclawModelUsed: aiResult.modelUsed,
+              openclawLatencyMs: aiResult.latencyMs
+            }
+          });
 
-      const aiMessage = await prisma.message.create({
-        data: {
-          text: aiResponseText,
-          sender: "ai",
-          conversationId
+          // Send to WhatsApp
+          const socket = getSocket(businessId);
+          const sendJid = getSendJid(conversation.externalId);
+          if (socket && sendJid) {
+             await socket.sendMessage(sendJid, { text: aiResult.text });
+          }
+
+          return NextResponse.json({ userMessage: newMessage, aiMessage });
         }
-      });
-
-      return NextResponse.json({ userMessage, aiMessage });
+      } catch (aiErr) {
+        console.error("AI Error in route:", aiErr.message);
+      }
     }
 
-    return NextResponse.json({ userMessage });
+    return NextResponse.json({ userMessage: newMessage });
 
   } catch (error) {
-    console.error("Message Error:", error);
-    return NextResponse.json({ error: "Failed to process message" }, { status: 500 });
+    return handleError(error);
   }
 }
 
 export async function GET(req, { params }) {
   try {
     const { id: conversationId } = params;
+    const { businessId } = verifyToken(req);
+
+    const conv = await prisma.conversation.findFirst({
+      where: { id: conversationId, businessId }
+    });
+
+    if (!conv) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
     const messages = await prisma.message.findMany({
       where: { conversationId },
       orderBy: { createdAt: "asc" }
     });
     return NextResponse.json(messages);
   } catch (error) {
-    return NextResponse.json({ error: "Failed to fetch messages" }, { status: 500 });
+    return handleError(error);
   }
 }

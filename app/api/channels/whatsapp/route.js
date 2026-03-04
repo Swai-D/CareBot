@@ -1,43 +1,30 @@
 // app/api/channels/whatsapp/route.js
 import prisma from "@/lib/prisma";
-import jwt from "jsonwebtoken";
 import { NextResponse } from "next/server";
 import { initWhatsAppSocket, getQR, getStatus } from "@/lib/whatsapp";
-
-const SECRET = process.env.JWT_SECRET || "carebot_secret_key_2026";
-
-async function getAuthUser(req) {
-  const authHeader = req.headers.get("authorization");
-  if (!authHeader) return null;
-  const token = authHeader.split(" ")[1];
-  try {
-    const decoded = jwt.verify(token, SECRET);
-    return await prisma.user.findUnique({
-      where: { id: decoded.userId }
-    });
-  } catch { return null; }
-}
+import { verifyToken, handleError } from "@/lib/auth";
 
 export async function GET(req) {
-  const user = await getAuthUser(req);
-  if (!user || !user.businessId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    const decoded = verifyToken(req);
+    const businessId = decoded.businessId;
 
-  const businessId = user.businessId;
-  const qr = getQR(businessId);
-  const status = getStatus(businessId);
+    const qr = getQR(businessId);
+    const status = getStatus(businessId);
 
-  return NextResponse.json({ qr, status });
+    return NextResponse.json({ qr, status });
+  } catch (err) {
+    return handleError(err);
+  }
 }
 
 export async function POST(req) {
-  const user = await getAuthUser(req);
-  if (!user || !user.businessId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
   try {
+    const decoded = verifyToken(req);
+    const businessId = decoded.businessId;
     const { phoneNumber } = await req.json();
-    const businessId = user.businessId;
 
-    // Hifadhi kwenye DB kwanza (wrap in try ili isikwamishe socket kama DB ina error)
+    // Hifadhi kwenye DB kwanza
     try {
       await prisma.channel.upsert({
         where: { businessId_type: { businessId, type: 'WHATSAPP' } },
@@ -52,8 +39,7 @@ export async function POST(req) {
     });
 
     return NextResponse.json({ message: "WhatsApp started", status: "connecting" });
-  } catch (error) {
-    console.error("POST Error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (err) {
+    return handleError(err);
   }
 }
