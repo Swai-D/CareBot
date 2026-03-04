@@ -2,17 +2,8 @@
 import prisma from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { verifyToken, handleError } from "@/lib/auth";
-import { getSocket, initWhatsAppSocket } from "@/lib/whatsapp";
+import { getSocket, initWhatsAppSocket, sendWithRetry } from "@/lib/whatsapp";
 import { getAIResponse } from "@/lib/ai";
-
-// ── Helper: normalize JID kwa ajili ya kutuma ─────────────────────
-function getSendJid(externalId = "") {
-  if (!externalId.startsWith("wa_")) return null;
-  const parts = externalId.split("_");
-  if (parts.length < 2) return null;
-  const phone = parts[1].split("@")[0].split(":")[0];
-  return `${phone}@s.whatsapp.net`;
-}
 
 export async function POST(req, { params }) {
   try {
@@ -21,7 +12,6 @@ export async function POST(req, { params }) {
 
     const { businessId } = verifyToken(req);
 
-    // Find the conversation and verify ownership
     const conversation = await prisma.conversation.findFirst({
       where: { id: conversationId, businessId },
       include: { 
@@ -31,7 +21,6 @@ export async function POST(req, { params }) {
 
     if (!conversation) return NextResponse.json({ error: "Conversation not found" }, { status: 404 });
 
-    // Save message
     const senderType = sender === "customer" ? "CUSTOMER" : "HUMAN_AGENT";
     const newMessage = await prisma.message.create({
       data: {
@@ -42,29 +31,26 @@ export async function POST(req, { params }) {
       }
     });
 
-    // Update conversation
     await prisma.conversation.update({
       where: { id: conversationId },
       data: { updatedAt: new Date(), lastMessageAt: new Date() }
     });
 
-    // If admin is sending message, try to send via WhatsApp
+    // ✅ KAMA NI ADMIN: Tuma kwenda WhatsApp
     if (senderType === "HUMAN_AGENT") {
-       let socket = getSocket(businessId);
+       // ✅ FIX: Tumia customerId moja kwa moja kwani sasa hivi ni Full JID
+       const sendJid = conversation.customerId;
        
-       if (!socket?.user) {
-         console.warn(`[WA:${businessId}] Socket is missing from memory during manual send. Re-initializing...`);
-         socket = await initWhatsAppSocket(businessId);
-       }
-
-       const sendJid = getSendJid(conversation.externalId);
-       if (socket && sendJid) {
-          console.log(`[WA:${businessId}] Sending manual message to ${sendJid}`);
-          await socket.sendMessage(sendJid, { text });
+       if (sendJid && sendJid.includes("@")) {
+          console.log(`[WA:${businessId}] Dashboard manual sending to ${sendJid}...`);
+          const sent = await sendWithRetry(businessId, sendJid, text);
+          if (sent) console.log(`[WA:${businessId}] ✓ Manual message sent!`);
+       } else {
+          console.warn(`[WA:${businessId}] Invalid JID for manual send: ${sendJid}`);
        }
     }
 
-    // If message is from customer, generate AI response
+    // KAMA NI CUSTOMER: AI Response Flow
     if (senderType === "CUSTOMER" && !conversation.isHumanHandling) {
       const config = conversation.business.agentConfig;
       const faqs = conversation.business.agentFaqs;
@@ -96,11 +82,10 @@ export async function POST(req, { params }) {
             }
           });
 
-          // Send to WhatsApp
-          const socket = getSocket(businessId);
-          const sendJid = getSendJid(conversation.externalId);
-          if (socket && sendJid) {
-             await socket.sendMessage(sendJid, { text: aiResult.text });
+          // ✅ AI Send Logic pia itumie customerId moja kwa moja
+          const sendJid = conversation.customerId;
+          if (sendJid && sendJid.includes("@")) {
+             await sendWithRetry(businessId, sendJid, aiResult.text);
           }
 
           return NextResponse.json({ userMessage: newMessage, aiMessage });
